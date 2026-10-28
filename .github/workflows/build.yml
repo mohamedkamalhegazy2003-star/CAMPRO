@@ -27,7 +27,12 @@ jobs:
           gradle-version: 8.10.2
 
       - name: Build release APK
-        run: gradle assembleRelease --no-daemon --stacktrace
+        run: |
+          set -o pipefail
+          gradle assembleRelease --no-daemon --stacktrace 2>&1 | tee build.log || {
+            grep -E "^e: |^w: .*error|What went wrong|Could not|error:|FAILED" -A2 build.log | head -40 | while IFS= read -r l; do echo "::error::$l"; done
+            exit 1
+          }
 
       - name: Rename APK
         run: |
