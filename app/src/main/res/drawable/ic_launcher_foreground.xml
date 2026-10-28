@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- camera top hump -->
+    <path
+        android:fillColor="#FFF2F2F5"
+        android:pathData="M44,38 L47,32 L61,32 L64,38 Z" />
+
+    <!-- camera body -->
+    <path
+        android:fillColor="#FFF2F2F5"
+        android:pathData="M36,38 h36 a8,8 0 0 1 8,8 v20 a8,8 0 0 1 -8,8 h-36 a8,8 0 0 1 -8,-8 v-20 a8,8 0 0 1 8,-8 z" />
+
+    <!-- lens outer -->
+    <path
+        android:fillColor="#FF1B1F3B"
+        android:pathData="M54,56 m-15,0 a15,15 0 1,0 30,0 a15,15 0 1,0 -30,0" />
+
+    <!-- lens orange ring -->
+    <path
+        android:fillColor="#FFFF7A18"
+        android:pathData="M54,56 m-12,0 a12,12 0 1,0 24,0 a12,12 0 1,0 -24,0" />
+
+    <!-- lens glass -->
+    <path
+        android:fillColor="#FF0A0C18"
+        android:pathData="M54,56 m-9,0 a9,9 0 1,0 18,0 a9,9 0 1,0 -18,0" />
+
+    <!-- lens highlight -->
+    <path
+        android:fillColor="#CCFFFFFF"
+        android:pathData="M50,52 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0" />
+
+    <!-- small flash dot -->
+    <path
+        android:fillColor="#FFFF7A18"
+        android:pathData="M73,45 m-2,0 a2,2 0 1,0 4,0 a2,2 0 1,0 -4,0" />
+</vector>
