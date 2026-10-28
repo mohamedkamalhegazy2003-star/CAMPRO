@@ -12,6 +12,8 @@ import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.util.Size
 import android.view.Gravity
@@ -35,6 +37,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import androidx.camera.extensions.ExtensionMode
+import androidx.camera.extensions.ExtensionsManager
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.FocusMeteringAction
@@ -52,6 +56,7 @@ import androidx.core.view.WindowInsetsCompat
 import java.io.File
 import java.util.Locale
 import java.util.concurrent.Executors
+import kotlin.math.roundToInt
 
 class MainActivity : AppCompatActivity() {
 
@@ -59,6 +64,8 @@ class MainActivity : AppCompatActivity() {
         /** CAMPRO is tuned for Samsung Galaxy A35 only (model codes SM-A356*). Set false to run anywhere. */
         private const val STRICT_A35_ONLY = true
         private const val TAG = "CAMPRO"
+        /** Software HDR+ (3-shot exposure bracket + fusion). Not a CameraX extension. */
+        private const val SOFT_HDR = -100
         private val ACCENT = Color.parseColor("#FF7A18")
         private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
         private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
@@ -76,8 +83,24 @@ class MainActivity : AppCompatActivity() {
     private lateinit var shutter: ShutterView
     private lateinit var flashBtn: IconView
     private lateinit var gridBtn: IconView
-    private lateinit var tabCinema: TextView
-    private lateinit var tabKodak: TextView
+    private val tabViews = mutableMapOf<Category, TextView>()
+    private lateinit var modeBar: LinearLayout
+    private lateinit var evBox: LinearLayout
+    private lateinit var evBar: SeekBar
+    private lateinit var evLabel: TextView
+    private lateinit var timerBtn: IconView
+    private lateinit var evBtn: IconView
+    private lateinit var countdown: TextView
+    private var extMgr: ExtensionsManager? = null
+    private var extMode: Int = ExtensionMode.NONE
+    private var timerSec = 0
+    private var evLower = 0
+    private var evStep = 1f
+    private val ui = Handler(Looper.getMainLooper())
+    private val evHide = Runnable {
+        evBox.visibility = View.GONE
+        evBtn.state = 0
+    }
 
     private val chips = mutableListOf<Pair<CamFilter, View>>()
 
@@ -207,14 +230,18 @@ class MainActivity : AppCompatActivity() {
         val title = TextView(this).apply {
             text = "CAMPRO"
             setTextColor(Color.WHITE)
-            textSize = 18f
+            textSize = 16f
             typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
-            letterSpacing = 0.22f
+            letterSpacing = 0.18f
             gravity = Gravity.CENTER
         }
-        topBar.addView(flashBtn, LinearLayout.LayoutParams(dp(56), dp(56)))
+        timerBtn = IconView(this, IconView.TIMER).apply { setOnClickListener { cycleTimer() } }
+        evBtn = IconView(this, IconView.EV).apply { setOnClickListener { toggleEv() } }
+        topBar.addView(flashBtn, LinearLayout.LayoutParams(dp(52), dp(56)))
+        topBar.addView(timerBtn, LinearLayout.LayoutParams(dp(52), dp(56)))
         topBar.addView(title, LinearLayout.LayoutParams(0, MATCH, 1f))
-        topBar.addView(gridBtn, LinearLayout.LayoutParams(dp(56), dp(56)))
+        topBar.addView(evBtn, LinearLayout.LayoutParams(dp(52), dp(56)))
+        topBar.addView(gridBtn, LinearLayout.LayoutParams(dp(52), dp(56)))
         pc.addView(topBar, FrameLayout.LayoutParams(MATCH, dp(56), Gravity.TOP))
 
         // intensity slider over the preview bottom
@@ -251,6 +278,64 @@ class MainActivity : AppCompatActivity() {
         intensityBox.addView(bar, LinearLayout.LayoutParams(0, WRAP, 1f).apply { marginStart = dp(10) })
         pc.addView(intensityBox, FrameLayout.LayoutParams(MATCH, dp(48), Gravity.BOTTOM))
 
+        // shooting-mode pills (PHOTO / HDR+ / HDR / NIGHT / PORTRAIT ...)
+        modeBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+        }
+        val modeScroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            isFillViewport = true
+            addView(modeBar, FrameLayout.LayoutParams(MATCH, MATCH))
+        }
+        pc.addView(modeScroll, FrameLayout.LayoutParams(MATCH, dp(36), Gravity.TOP).apply { topMargin = dp(56) })
+
+        // exposure compensation slider
+        evLabel = TextView(this).apply {
+            text = "EV 0.0"
+            setTextColor(Color.WHITE)
+            textSize = 12f
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        evBar = SeekBar(this).apply {
+            progressTintList = android.content.res.ColorStateList.valueOf(ACCENT)
+            thumbTintList = android.content.res.ColorStateList.valueOf(Color.WHITE)
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
+                    if (fromUser) setEv(p)
+                }
+                override fun onStartTrackingTouch(s: SeekBar?) { ui.removeCallbacks(evHide) }
+                override fun onStopTrackingTouch(s: SeekBar?) { ui.postDelayed(evHide, 3500) }
+            })
+        }
+        evBox = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(16), 0, dp(16), 0)
+            background = GradientDrawable().apply {
+                cornerRadius = dp(20).toFloat()
+                setColor(Color.argb(140, 0, 0, 0))
+            }
+            visibility = View.GONE
+        }
+        evBox.addView(evLabel, LinearLayout.LayoutParams(dp(64), WRAP))
+        evBox.addView(evBar, LinearLayout.LayoutParams(0, WRAP, 1f))
+        pc.addView(evBox, FrameLayout.LayoutParams(MATCH, dp(40), Gravity.BOTTOM).apply {
+            bottomMargin = dp(56)
+            marginStart = dp(20)
+            marginEnd = dp(20)
+        })
+
+        countdown = TextView(this).apply {
+            setTextColor(Color.WHITE)
+            textSize = 96f
+            typeface = Typeface.DEFAULT_BOLD
+            setShadowLayer(12f, 0f, 0f, Color.BLACK)
+            gravity = Gravity.CENTER
+            visibility = View.GONE
+        }
+        pc.addView(countdown, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.CENTER))
+
         setupGestures()
 
         // ---- bottom panel
@@ -260,12 +345,18 @@ class MainActivity : AppCompatActivity() {
         }
         root.addView(bottom, LinearLayout.LayoutParams(MATCH, 0, 1f))
 
-        val tabs = LinearLayout(this).apply { gravity = Gravity.CENTER }
-        tabCinema = makeTab("CINEMATIC") { selectCategory(Category.CINEMA) }
-        tabKodak = makeTab("KODAK") { selectCategory(Category.KODAK) }
-        tabs.addView(tabCinema)
-        tabs.addView(tabKodak)
-        bottom.addView(tabs, LinearLayout.LayoutParams(MATCH, dp(40)))
+        val tabRow = LinearLayout(this).apply { gravity = Gravity.CENTER }
+        for (cat in listOf(Category.CINEMA, Category.KODAK, Category.IPHONE, Category.FUJI)) {
+            val tv = makeTab(cat.label) { selectCategory(cat) }
+            tabViews[cat] = tv
+            tabRow.addView(tv)
+        }
+        val tabScroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            isFillViewport = true
+            addView(tabRow, FrameLayout.LayoutParams(MATCH, MATCH))
+        }
+        bottom.addView(tabScroll, LinearLayout.LayoutParams(MATCH, dp(40)))
 
         val scroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
         strip = LinearLayout(this).apply {
@@ -324,14 +415,15 @@ class MainActivity : AppCompatActivity() {
         typeface = Typeface.DEFAULT_BOLD
         letterSpacing = 0.15f
         gravity = Gravity.CENTER
-        setPadding(dp(22), dp(8), dp(22), dp(8))
+        setPadding(dp(16), dp(8), dp(16), dp(8))
         setOnClickListener { onClick() }
     }
 
     private fun selectCategory(cat: Category) {
         category = cat
-        tabCinema.setTextColor(if (cat == Category.CINEMA) ACCENT else Color.parseColor("#8A8F98"))
-        tabKodak.setTextColor(if (cat == Category.KODAK) ACCENT else Color.parseColor("#8A8F98"))
+        for ((c, tv) in tabViews) {
+            tv.setTextColor(if (c == cat) ACCENT else Color.parseColor("#8A8F98"))
+        }
         buildStrip()
     }
 
@@ -472,14 +564,28 @@ class MainActivity : AppCompatActivity() {
     private fun startCamera() {
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
-            cameraProvider = future.get()
-            bindCamera()
+            val provider = future.get()
+            cameraProvider = provider
+            val ef = ExtensionsManager.getInstanceAsync(this, provider)
+            ef.addListener({
+                extMgr = try { ef.get() } catch (e: Exception) { null }
+                refreshModes()
+                bindCamera()
+            }, ContextCompat.getMainExecutor(this))
         }, ContextCompat.getMainExecutor(this))
     }
 
     private fun bindCamera() {
         val provider = cameraProvider ?: return
-        val selector = CameraSelector.Builder().requireLensFacing(lensFacing).build()
+        val base = CameraSelector.Builder().requireLensFacing(lensFacing).build()
+        val mgr = extMgr
+        val selector = try {
+            if (mgr != null && extMode > 0 && mgr.isExtensionAvailable(base, extMode))
+                mgr.getExtensionEnabledCameraSelector(base, extMode)
+            else base
+        } catch (e: Exception) {
+            base
+        }
 
         for (high in listOf(true, false)) {
             try {
@@ -512,18 +618,117 @@ class MainActivity : AppCompatActivity() {
 
                 camera = provider.bindToLifecycle(this, selector, preview, ic)
                 imageCapture = ic
-                Log.i(TAG, "Bound camera, highRes=$high")
+                setupEv()
+                Log.i(TAG, "Bound camera, ext=$extMode, highRes=$high")
                 return
             } catch (e: Exception) {
                 Log.w(TAG, "bind failed (highRes=$high)", e)
             }
         }
+        if (extMode != ExtensionMode.NONE) {
+            // this mode can't run on this camera: fall back to plain photo
+            extMode = ExtensionMode.NONE
+            refreshModes()
+            bindCamera()
+            return
+        }
         toast("Camera failed to start / تعذر تشغيل الكاميرا")
+    }
+
+    // ------------------------------------------------------------------ modes, EV, timer
+
+    private fun refreshModes() {
+        if (!::modeBar.isInitialized) return
+        modeBar.removeAllViews()
+        val base = CameraSelector.Builder().requireLensFacing(lensFacing).build()
+        val items = mutableListOf(ExtensionMode.NONE to "PHOTO", SOFT_HDR to "HDR+")
+        val mgr = extMgr
+        if (mgr != null) {
+            val candidates = listOf(
+                ExtensionMode.HDR to "HDR",
+                ExtensionMode.NIGHT to "NIGHT",
+                ExtensionMode.BOKEH to "PORTRAIT",
+                ExtensionMode.FACE_RETOUCH to "RETOUCH",
+                ExtensionMode.AUTO to "AUTO"
+            )
+            for ((m, n) in candidates) {
+                val ok = try { mgr.isExtensionAvailable(base, m) } catch (e: Exception) { false }
+                if (ok) items.add(m to n)
+            }
+        }
+        for ((m, n) in items) {
+            val sel = m == extMode
+            val tv = TextView(this).apply {
+                text = n
+                textSize = 12f
+                typeface = Typeface.DEFAULT_BOLD
+                gravity = Gravity.CENTER
+                setTextColor(if (sel) Color.BLACK else Color.WHITE)
+                setPadding(dp(14), dp(5), dp(14), dp(5))
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(16).toFloat()
+                    setColor(if (sel) ACCENT else Color.argb(110, 0, 0, 0))
+                }
+                setOnClickListener {
+                    if (extMode != m) {
+                        extMode = m
+                        refreshModes()
+                        bindCamera()
+                    }
+                }
+            }
+            modeBar.addView(tv, LinearLayout.LayoutParams(WRAP, WRAP).apply {
+                marginStart = dp(4)
+                marginEnd = dp(4)
+            })
+        }
+    }
+
+    private fun setupEv() {
+        val st = camera?.cameraInfo?.exposureState ?: return
+        if (!st.isExposureCompensationSupported) {
+            evBtn.visibility = View.GONE
+            return
+        }
+        evBtn.visibility = View.VISIBLE
+        evLower = st.exposureCompensationRange.lower
+        evStep = st.exposureCompensationStep.toFloat()
+        evBar.max = st.exposureCompensationRange.upper - evLower
+        evBar.progress = -evLower
+        evLabel.text = "EV 0.0"
+    }
+
+    private fun setEv(p: Int) {
+        val idx = evLower + p
+        camera?.cameraControl?.setExposureCompensationIndex(idx)
+        evLabel.text = String.format(Locale.US, "EV %+.1f", idx * evStep)
+    }
+
+    private fun toggleEv() {
+        ui.removeCallbacks(evHide)
+        if (evBox.visibility == View.VISIBLE) {
+            evHide.run()
+        } else {
+            evBox.visibility = View.VISIBLE
+            evBtn.state = 2
+            ui.postDelayed(evHide, 3500)
+        }
+    }
+
+    private fun cycleTimer() {
+        timerSec = when (timerSec) {
+            0 -> 3
+            3 -> 10
+            else -> 0
+        }
+        timerBtn.state = timerSec
     }
 
     private fun flipCamera() {
         lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK)
             CameraSelector.LENS_FACING_FRONT else CameraSelector.LENS_FACING_BACK
+        extMode = ExtensionMode.NONE
+        refreshModes()
         bindCamera()
     }
 
@@ -547,6 +752,120 @@ class MainActivity : AppCompatActivity() {
     // ------------------------------------------------------------------ capture
 
     private fun takePhoto() {
+        if (busy) return
+        if (timerSec <= 0) {
+            captureNow()
+            return
+        }
+        busy = true
+        runCountdown(timerSec)
+    }
+
+    private fun runCountdown(n: Int) {
+        if (n <= 0) {
+            countdown.visibility = View.GONE
+            busy = false
+            captureNow()
+            return
+        }
+        countdown.text = n.toString()
+        countdown.visibility = View.VISIBLE
+        ui.postDelayed({ runCountdown(n - 1) }, 1000)
+    }
+
+    /** HDR+: three frames (-2 EV, 0, +2 EV) fused into one photo. */
+    private fun captureHdr() {
+        val ic = imageCapture ?: return
+        val cam = camera ?: return
+        if (busy) return
+        val st = cam.cameraInfo.exposureState
+        if (!st.isExposureCompensationSupported) {
+            toast("HDR+ not supported on this camera / غير مدعوم")
+            return
+        }
+        busy = true
+        shutter.busy = true
+        toast("HDR+ — hold steady / ثبّت الهاتف")
+        flashFx.animate().cancel()
+        flashFx.alpha = 0.5f
+        flashFx.animate().alpha(0f).setDuration(220).start()
+
+        val step = st.exposureCompensationStep.toFloat()
+        val range = st.exposureCompensationRange
+        val base = st.exposureCompensationIndex
+        val shots = listOf(-2f, 0f, 2f).map { (base + (it / step).roundToInt()).coerceIn(range.lower, range.upper) }
+        val files = mutableListOf<File>()
+        val filter = currentFilter
+        val k = if (filter.isNone) 0f else intensity
+        val exec = ContextCompat.getMainExecutor(this)
+
+        fun fail() {
+            files.forEach { it.delete() }
+            cam.cameraControl.setExposureCompensationIndex(base)
+            busy = false
+            shutter.busy = false
+            toast("Capture failed / فشل التصوير")
+        }
+
+        fun next(i: Int) {
+            if (i >= shots.size) {
+                cam.cameraControl.setExposureCompensationIndex(base)
+                io.execute {
+                    val uri = try {
+                        PhotoSaver.saveHdr(applicationContext, files, filter, k)
+                    } catch (t: Throwable) {
+                        Log.e(TAG, "hdr save failed", t)
+                        null
+                    }
+                    files.forEach { it.delete() }
+                    val thumbBmp: Bitmap? = uri?.let {
+                        try {
+                            contentResolver.loadThumbnail(it, Size(320, 320), null)
+                        } catch (t: Throwable) {
+                            null
+                        }
+                    }
+                    runOnUiThread {
+                        busy = false
+                        shutter.busy = false
+                        if (uri != null) {
+                            lastUri = uri
+                            thumbBmp?.let { thumb.setImageBitmap(it) }
+                        } else {
+                            toast("Save failed / فشل الحفظ")
+                        }
+                    }
+                }
+                return
+            }
+            val f = File.createTempFile("hdr_", ".jpg", cacheDir)
+            cam.cameraControl.setExposureCompensationIndex(shots[i]).addListener({
+                ic.takePicture(
+                    ImageCapture.OutputFileOptions.Builder(f).build(),
+                    exec,
+                    object : ImageCapture.OnImageSavedCallback {
+                        override fun onImageSaved(result: ImageCapture.OutputFileResults) {
+                            files.add(f)
+                            next(i + 1)
+                        }
+
+                        override fun onError(exception: ImageCaptureException) {
+                            Log.e(TAG, "hdr shot error", exception)
+                            f.delete()
+                            fail()
+                        }
+                    }
+                )
+            }, exec)
+        }
+        next(0)
+    }
+
+    private fun captureNow() {
+        if (extMode == SOFT_HDR) {
+            captureHdr()
+            return
+        }
         val ic = imageCapture ?: return
         if (busy) return
         busy = true
@@ -628,6 +947,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        ui.removeCallbacksAndMessages(null)
         io.shutdown()
         super.onDestroy()
     }

@@ -4,8 +4,13 @@
 
 ## المميزات
 - **أعلى جودة**: CameraX بوضع MAXIMIZE_QUALITY + أعلى دقة متاحة + JPEG 100%
-- **9 فلاتر سينمائية** (Teal & Orange, Blockbuster, Noir Cine, Moody Blue, Golden Hour, Matte Film, Cyber Neon, Desert Dust, Thriller Green)
-- **9 فلاتر Kodak-inspired** (Gold 200, Portra 400, Ektar 100, ColorPlus 200, Ultramax 400, Vision3 500T, Kodachrome, Tri-X 400 B&W, Funsaver Fade)
+- **16 فلتر سينمائي** (Teal & Orange, Bleach Bypass, Day for Night, Vintage 70s, Sci-Fi Cyan ...)
+- **14 فلتر Kodak-inspired** (Portra 400, Ektar 100, Kodachrome, Ektachrome, Tri-X, T-Max, Disposable Flash ...)
+- **15 فلتر على طراز iPhone** (Vivid / Vivid Warm / Vivid Cool, Dramatic / Warm / Cool, Mono, Silvertone, Noir, Instant, Process, Transfer, Chrome, Fade, Tonal)
+- **8 فلاتر Fuji-inspired** (Velvia, Provia, Astia, Classic Chrome, Pro Neg, Eterna, Superia, Acros)
+- **HDR+** : 3 صور بتعريضات مختلفة (-2/0/+2 EV) تتدمج في صورة واحدة (مخرجها حتى ~8 ميجابكسل، ويحتاج تثبيت الهاتف)
+- **أوضاع جوجل كاميرا** (HDR / Night / Portrait / Face Retouch / Auto) عن طريق CameraX Extensions، وبتظهر فقط لو الهاتف بيدعمها
+- مؤقت 3/10 ثواني، وتحكم في التعريض (EV)
 - معاينة حية للفلتر + نفس الفلتر على الصورة المحفوظة (WYSIWYG)
 - شريط شدة الفلتر (Intensity) + Vignette + حبيبات فيلم (Grain)
 - زووم بالقرصة، تركيز باللمس، فلاش (Off/Auto/On)، شبكة، كاميرا أمامية، زر الصوت للتصوير

@@ -5,6 +5,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
+import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Matrix
 import android.graphics.Paint
@@ -13,6 +14,7 @@ import android.net.Uri
 import android.provider.MediaStore
 import androidx.exifinterface.media.ExifInterface
 import java.io.File
+import java.io.OutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -21,7 +23,36 @@ import kotlin.math.roundToInt
 /** Applies a look to a captured JPEG and stores it in Pictures/CAMPRO. */
 object PhotoSaver {
 
-    fun save(ctx: Context, src: File, filter: CamFilter, k: Float): Uri? {
+    fun save(ctx: Context, src: File, filter: CamFilter, k: Float): Uri? = store(ctx) { out ->
+        if (filter.isNone || k <= 0.01f) {
+            // untouched original: copy the camera JPEG as-is (full quality + EXIF)
+            src.inputStream().use { it.copyTo(out) }
+        } else {
+            val bmp = process(src, filter, k)
+            bmp.compress(Bitmap.CompressFormat.JPEG, 100, out)
+            bmp.recycle()
+        }
+    }
+
+    /** HDR+: fuses an exposure bracket (dark, normal, bright) and then applies the look. */
+    fun saveHdr(ctx: Context, files: List<File>, filter: CamFilter, k: Float): Uri? = store(ctx) { out ->
+        val orientation = orientationOf(files[files.size / 2])
+        var maxPx = 8_000_000
+        var bmp: Bitmap? = null
+        while (bmp == null) {
+            try {
+                val fused = HdrFusion.fuse(files, maxPx)
+                bmp = compose(fused, orientation, filter, k, 1.12f)
+            } catch (e: OutOfMemoryError) {
+                maxPx /= 2
+                if (maxPx < 500_000) throw e
+            }
+        }
+        bmp.compress(Bitmap.CompressFormat.JPEG, 100, out)
+        bmp.recycle()
+    }
+
+    private fun store(ctx: Context, write: (OutputStream) -> Unit): Uri? {
         val name = "CAMPRO_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + ".jpg"
         val cv = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, name)
@@ -32,16 +63,7 @@ object PhotoSaver {
         val resolver = ctx.contentResolver
         val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv) ?: return null
         return try {
-            resolver.openOutputStream(uri)!!.use { out ->
-                if (filter.isNone || k <= 0.01f) {
-                    // untouched original: copy the camera JPEG as-is (full quality + EXIF)
-                    src.inputStream().use { it.copyTo(out) }
-                } else {
-                    val bmp = process(src, filter, k)
-                    bmp.compress(Bitmap.CompressFormat.JPEG, 100, out)
-                    bmp.recycle()
-                }
-            }
+            resolver.openOutputStream(uri)!!.use { write(it) }
             cv.clear()
             cv.put(MediaStore.Images.Media.IS_PENDING, 0)
             resolver.update(uri, cv, null, null)
@@ -56,7 +78,13 @@ object PhotoSaver {
         var sample = 1
         while (true) {
             try {
-                return render(src, f, k, sample)
+                val opts = BitmapFactory.Options().apply {
+                    inSampleSize = sample
+                    inPreferredConfig = Bitmap.Config.ARGB_8888
+                }
+                val bmp = BitmapFactory.decodeFile(src.absolutePath, opts)
+                    ?: throw IllegalStateException("decode failed")
+                return compose(bmp, orientationOf(src), f, k, 1f)
             } catch (e: OutOfMemoryError) {
                 sample *= 2
                 if (sample > 8) throw e
@@ -64,16 +92,12 @@ object PhotoSaver {
         }
     }
 
-    private fun render(src: File, f: CamFilter, k: Float, sample: Int): Bitmap {
-        val opts = BitmapFactory.Options().apply {
-            inSampleSize = sample
-            inPreferredConfig = Bitmap.Config.ARGB_8888
-        }
-        val bmp = BitmapFactory.decodeFile(src.absolutePath, opts)
-            ?: throw IllegalStateException("decode failed")
-
-        val orientation = ExifInterface(src.absolutePath)
+    private fun orientationOf(f: File): Int =
+        ExifInterface(f.absolutePath)
             .getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+
+    /** Rotates by EXIF, applies the look, vignette and grain. Recycles [bmp]. */
+    private fun compose(bmp: Bitmap, orientation: Int, f: CamFilter, k: Float, extraSat: Float): Bitmap {
         val m = Matrix()
         when (orientation) {
             ExifInterface.ORIENTATION_ROTATE_90 -> m.postRotate(90f)
@@ -96,7 +120,14 @@ object PhotoSaver {
         }
         val canvas = Canvas(out)
         val paint = Paint(Paint.FILTER_BITMAP_FLAG)
-        paint.colorFilter = ColorMatrixColorFilter(Looks.lerp(f.matrix, k))
+        val cm = ColorMatrix()
+        if (extraSat != 1f) {
+            cm.setSaturation(extraSat)
+            cm.postConcat(Looks.lerp(f.matrix, k))
+        } else {
+            cm.set(Looks.lerp(f.matrix, k))
+        }
+        paint.colorFilter = ColorMatrixColorFilter(cm)
         canvas.drawBitmap(bmp, m, paint)
         bmp.recycle()
 

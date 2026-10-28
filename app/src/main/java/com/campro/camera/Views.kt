@@ -60,6 +60,8 @@ class IconView(ctx: Context, private val type: Int) : View(ctx) {
         const val FLASH = 0
         const val GRID = 1
         const val FLIP = 2
+        const val TIMER = 3
+        const val EV = 4
     }
 
     /** FLASH: 0 = off, 1 = auto, 2 = on. GRID: 0 = hidden, 2 = shown. */
@@ -90,7 +92,38 @@ class IconView(ctx: Context, private val type: Int) : View(ctx) {
             FLASH -> drawFlash(canvas, s, cx, cy)
             GRID -> drawGrid(canvas, s, cx, cy)
             FLIP -> drawFlip(canvas, s, cx, cy)
+            TIMER -> drawTimer(canvas, s, cx, cy)
+            EV -> drawEv(canvas, s, cx, cy)
         }
+    }
+
+    /** TIMER: state = seconds (0, 3, 10). */
+    private fun drawTimer(c: Canvas, s: Float, cx: Float, cy: Float) {
+        val r = s * 0.24f
+        val col = if (state != 0) accent else Color.WHITE
+        stroke.color = col
+        c.drawCircle(cx, cy + s * 0.03f, r, stroke)
+        c.drawLine(cx - r * 0.35f, cy - r - s * 0.07f, cx + r * 0.35f, cy - r - s * 0.07f, stroke)
+        if (state != 0) {
+            text.color = col
+            text.textSize = s * 0.30f
+            c.drawText(state.toString(), cx, cy + s * 0.03f + s * 0.10f, text)
+        } else {
+            c.drawLine(cx, cy + s * 0.03f, cx, cy + s * 0.03f - r * 0.6f, stroke)
+            c.drawLine(cx, cy + s * 0.03f, cx + r * 0.45f, cy + s * 0.03f, stroke)
+        }
+    }
+
+    /** EV: state != 0 means the slider is open. */
+    private fun drawEv(c: Canvas, s: Float, cx: Float, cy: Float) {
+        val r = s * 0.26f
+        val col = if (state != 0) accent else Color.WHITE
+        stroke.color = col
+        c.drawCircle(cx, cy, r, stroke)
+        val k = r * 0.5f
+        c.drawLine(cx - k, cy - r * 0.25f, cx + k, cy - r * 0.25f, stroke)
+        c.drawLine(cx, cy - r * 0.25f - k, cx, cy - r * 0.25f + k, stroke)
+        c.drawLine(cx - k, cy + r * 0.45f, cx + k, cy + r * 0.45f, stroke)
     }
 
     private fun drawFlash(c: Canvas, s: Float, cx: Float, cy: Float) {
