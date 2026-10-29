@@ -29,6 +29,10 @@ android {
     }
     kotlinOptions {
         jvmTarget = "17"
+        freeCompilerArgs += listOf(
+            "-opt-in=androidx.media3.common.util.UnstableApi",
+            "-opt-in=androidx.camera.camera2.interop.ExperimentalCamera2Interop"
+        )
     }
     lint {
         abortOnError = false
@@ -47,4 +51,10 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:$camerax")
     implementation("androidx.camera:camera-view:$camerax")
     implementation("androidx.camera:camera-extensions:$camerax")
+    implementation("androidx.camera:camera-video:$camerax")
+
+    val media3 = "1.5.1"
+    implementation("androidx.media3:media3-common:$media3")
+    implementation("androidx.media3:media3-effect:$media3")
+    implementation("androidx.media3:media3-transformer:$media3")
 }

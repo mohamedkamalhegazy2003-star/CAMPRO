@@ -4,11 +4,13 @@ import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.BitmapRegionDecoder
 import android.graphics.Canvas
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.Rect
 import android.graphics.RectF
 import android.net.Uri
 import android.provider.MediaStore
@@ -18,6 +20,7 @@ import java.io.OutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 /** Applies a look to a captured JPEG and stores it in Pictures/CAMPRO. */
@@ -74,30 +77,67 @@ object PhotoSaver {
         }
     }
 
+    /**
+     * Full-resolution look: the JPEG is decoded in 512-row tiles (so even a 50 MP photo never needs a
+     * second full-size bitmap) and drawn, rotated and filtered, into one output bitmap.
+     * Falls back to a smaller output only when memory runs out.
+     */
     private fun process(src: File, f: CamFilter, k: Float): Bitmap {
-        var sample = 1
+        var scale = 1f
         while (true) {
             try {
-                val opts = BitmapFactory.Options().apply {
-                    inSampleSize = sample
-                    inPreferredConfig = Bitmap.Config.ARGB_8888
-                }
-                val bmp = BitmapFactory.decodeFile(src.absolutePath, opts)
-                    ?: throw IllegalStateException("decode failed")
-                return compose(bmp, orientationOf(src), f, k, 1f)
+                return renderTiled(src, f, k, scale)
             } catch (e: OutOfMemoryError) {
-                sample *= 2
-                if (sample > 8) throw e
+                scale /= 2f
+                if (scale < 0.2f) throw e
             }
         }
+    }
+
+    private fun renderTiled(src: File, f: CamFilter, k: Float, scale: Float): Bitmap {
+        val b = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(src.absolutePath, b)
+        val w = b.outWidth
+        val h = b.outHeight
+        if (w <= 0 || h <= 0) throw IllegalStateException("decode failed")
+
+        val m = orientMatrix(orientationOf(src), w, h)
+        m.postScale(scale, scale)
+        val r = RectF(0f, 0f, w.toFloat(), h.toFloat())
+        m.mapRect(r)
+        val out = Bitmap.createBitmap(r.width().roundToInt(), r.height().roundToInt(), Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(out)
+        val paint = Paint(Paint.FILTER_BITMAP_FLAG)
+        paint.colorFilter = ColorMatrixColorFilter(Looks.lerp(f.matrix, k))
+        val opts = BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 }
+
+        val dec = BitmapRegionDecoder.newInstance(src.absolutePath)
+        try {
+            val tm = Matrix()
+            var y = 0
+            while (y < h) {
+                val th = min(512, h - y)
+                val tile = dec.decodeRegion(Rect(0, y, w, y + th), opts)
+                tm.set(m)
+                tm.preTranslate(0f, y.toFloat())
+                canvas.drawBitmap(tile, tm, paint)
+                tile.recycle()
+                y += th
+            }
+        } finally {
+            dec.recycle()
+        }
+
+        Effects.draw(canvas, out.width.toFloat(), out.height.toFloat(), f.vignette * k, f.grain * k, false)
+        return out
     }
 
     private fun orientationOf(f: File): Int =
         ExifInterface(f.absolutePath)
             .getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
 
-    /** Rotates by EXIF, applies the look, vignette and grain. Recycles [bmp]. */
-    private fun compose(bmp: Bitmap, orientation: Int, f: CamFilter, k: Float, extraSat: Float): Bitmap {
+    /** EXIF orientation as a matrix whose output starts at (0,0). */
+    private fun orientMatrix(orientation: Int, w: Int, h: Int): Matrix {
         val m = Matrix()
         when (orientation) {
             ExifInterface.ORIENTATION_ROTATE_90 -> m.postRotate(90f)
@@ -108,10 +148,17 @@ object PhotoSaver {
             ExifInterface.ORIENTATION_TRANSPOSE -> { m.postRotate(90f); m.postScale(-1f, 1f) }
             ExifInterface.ORIENTATION_TRANSVERSE -> { m.postRotate(-90f); m.postScale(-1f, 1f) }
         }
-        val r = RectF(0f, 0f, bmp.width.toFloat(), bmp.height.toFloat())
+        val r = RectF(0f, 0f, w.toFloat(), h.toFloat())
         m.mapRect(r)
         m.postTranslate(-r.left, -r.top)
+        return m
+    }
 
+    /** Rotates by EXIF, applies the look, vignette and grain. Recycles [bmp]. */
+    private fun compose(bmp: Bitmap, orientation: Int, f: CamFilter, k: Float, extraSat: Float): Bitmap {
+        val m = orientMatrix(orientation, bmp.width, bmp.height)
+        val r = RectF(0f, 0f, bmp.width.toFloat(), bmp.height.toFloat())
+        m.mapRect(r)
         val out = try {
             Bitmap.createBitmap(r.width().roundToInt(), r.height().roundToInt(), Bitmap.Config.ARGB_8888)
         } catch (e: OutOfMemoryError) {

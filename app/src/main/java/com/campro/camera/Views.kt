@@ -15,6 +15,7 @@ class EffectsView(ctx: Context) : View(ctx) {
     private var vignette = 0f
     private var grain = 0f
     private val tick = Runnable { invalidate() }
+    private val live = LiveEffects()
 
     fun set(v: Float, g: Float) {
         vignette = v
@@ -25,9 +26,9 @@ class EffectsView(ctx: Context) : View(ctx) {
     override fun onDraw(canvas: Canvas) {
         removeCallbacks(tick)
         if (vignette > 0.01f || grain > 0.01f) {
-            Effects.draw(canvas, width.toFloat(), height.toFloat(), vignette, grain, true)
+            live.draw(canvas, width.toFloat(), height.toFloat(), vignette, grain)
         }
-        if (grain > 0.01f) postDelayed(tick, 90)
+        if (grain > 0.01f) postDelayed(tick, 100)
     }
 
     override fun onDetachedFromWindow() {
@@ -196,7 +197,7 @@ class IconView(ctx: Context, private val type: Int) : View(ctx) {
     }
 }
 
-/** Round shutter button: white ring + inner disc. */
+/** Round shutter button: ring + inner disc (red in video mode, red square while recording). */
 class ShutterView(ctx: Context) : View(ctx) {
     private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -207,11 +208,21 @@ class ShutterView(ctx: Context) : View(ctx) {
         style = Paint.Style.FILL
         color = Color.WHITE
     }
+    private val rect = RectF()
 
     var busy = false
         set(value) {
             field = value
-            disc.color = if (value) Color.parseColor("#FF7A18") else Color.WHITE
+            invalidate()
+        }
+    var videoMode = false
+        set(value) {
+            field = value
+            invalidate()
+        }
+    var recording = false
+        set(value) {
+            field = value
             invalidate()
         }
 
@@ -220,6 +231,17 @@ class ShutterView(ctx: Context) : View(ctx) {
         val cy = height / 2f
         val r = minOf(width, height) / 2f
         canvas.drawCircle(cx, cy, r - ring.strokeWidth / 2f, ring)
-        canvas.drawCircle(cx, cy, r - ring.strokeWidth * 2.2f, disc)
+        disc.color = when {
+            busy -> Color.parseColor("#FF7A18")
+            videoMode -> Color.parseColor("#FF3B30")
+            else -> Color.WHITE
+        }
+        if (recording) {
+            val h = r * 0.42f
+            rect.set(cx - h, cy - h, cx + h, cy + h)
+            canvas.drawRoundRect(rect, h * 0.3f, h * 0.3f, disc)
+        } else {
+            canvas.drawCircle(cx, cy, r - ring.strokeWidth * 2.2f, disc)
+        }
     }
 }
