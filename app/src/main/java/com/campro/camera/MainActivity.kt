@@ -6,6 +6,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
+import android.hardware.camera2.CameraMetadata
 import android.hardware.camera2.CaptureRequest
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
@@ -47,6 +50,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.resolutionselector.AspectRatioStrategy
 import androidx.camera.extensions.ExtensionMode
 import androidx.camera.extensions.ExtensionsManager
+import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.camera2.interop.Camera2Interop
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
@@ -87,6 +91,10 @@ class MainActivity : AppCompatActivity() {
         private const val SOFT_HDR = -100
         private const val VIDEO = -200
         private const val MP50 = -300
+        private const val WIDE = -400
+        private const val NIGHT_SIGHT = -500
+        private const val SUPER_ZOOM = -600
+        private const val PVIDEO = -700
         private val ACCENT = Color.parseColor("#FF7A18")
         private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
         private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
@@ -438,7 +446,7 @@ class MainActivity : AppCompatActivity() {
         root.addView(bottom, LinearLayout.LayoutParams(MATCH, 0, 1f))
 
         val tabRow = LinearLayout(this).apply { gravity = Gravity.CENTER }
-        for (cat in listOf(Category.CINEMA, Category.KODAK, Category.IPHONE, Category.FUJI)) {
+        for (cat in listOf(Category.CINEMA, Category.KODAK, Category.IPHONE, Category.FUJI, Category.NATURAL, Category.RAW, Category.VIBE)) {
             val tv = makeTab(cat.label) { selectCategory(cat) }
             tabViews[cat] = tv
             tabRow.addView(tv)
@@ -673,9 +681,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun bindCamera() {
         val provider = cameraProvider ?: return
-        val base = CameraSelector.Builder().requireLensFacing(lensFacing).build()
+        if (extMode == PVIDEO && !bokehSupported()) {
+            toast("Portrait video isn't supported on this phone / بورتريه الفيديو غير مدعوم")
+            extMode = VIDEO
+            refreshModes()
+        }
+        var base = CameraSelector.Builder().requireLensFacing(lensFacing).build()
+        if (extMode == WIDE) base = wideSelector(provider) ?: base
         val mgr = extMgr
-        val isVideo = extMode == VIDEO
+        val isVideo = isVid()
         val selector = try {
             if (!isVideo && mgr != null && extMode > 0 && mgr.isExtensionAvailable(base, extMode))
                 mgr.getExtensionEnabledCameraSelector(base, extMode)
@@ -694,10 +708,15 @@ class MainActivity : AppCompatActivity() {
 
                 val ratio = if (isVideo) AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY
                 else AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY
-                val preview = Preview.Builder()
+                val pb = Preview.Builder()
                     .setResolutionSelector(ResolutionSelector.Builder().setAspectRatioStrategy(ratio).build())
-                    .build()
-                    .also { it.surfaceProvider = previewView.surfaceProvider }
+                if (extMode == PVIDEO) {
+                    Camera2Interop.Extender(pb).setCaptureRequestOption(
+                        CaptureRequest.CONTROL_EXTENDED_SCENE_MODE,
+                        CameraMetadata.CONTROL_EXTENDED_SCENE_MODE_BOKEH_CONTINUOUS
+                    )
+                }
+                val preview = pb.build().also { it.surfaceProvider = previewView.surfaceProvider }
 
                 if (isVideo) {
                     val recorder = Recorder.Builder()
@@ -708,7 +727,14 @@ class MainActivity : AppCompatActivity() {
                             )
                         )
                         .build()
-                    val vc = VideoCapture.withOutput(recorder)
+                    val vcb = VideoCapture.Builder(recorder)
+                    if (extMode == PVIDEO) {
+                        Camera2Interop.Extender(vcb).setCaptureRequestOption(
+                            CaptureRequest.CONTROL_EXTENDED_SCENE_MODE,
+                            CameraMetadata.CONTROL_EXTENDED_SCENE_MODE_BOKEH_CONTINUOUS
+                        )
+                    }
+                    val vc = vcb.build()
                     camera = provider.bindToLifecycle(this, selector, preview, vc)
                     videoCapture = vc
                 } else {
@@ -745,11 +771,20 @@ class MainActivity : AppCompatActivity() {
                 setupEv()
                 setupZoomPills()
                 applyTorch()
+                if (extMode == WIDE) goWide()
+                if (extMode == SUPER_ZOOM) toast("Zoom in (2x or more) then shoot / قرّب الأول وبعدين صوّر")
                 Log.i(TAG, "Bound camera, mode=$extMode, attempt=$attempt")
                 return
             } catch (e: Exception) {
                 Log.w(TAG, "bind failed (mode=$extMode, attempt=$attempt)", e)
             }
+        }
+        if (extMode == PVIDEO) {
+            toast("Portrait video failed on this phone / بورتريه الفيديو مش شغال")
+            extMode = VIDEO
+            refreshModes()
+            bindCamera()
+            return
         }
         if (extMode != ExtensionMode.NONE) {
             // this mode can't run on this camera: fall back to plain photo
@@ -773,15 +808,71 @@ class MainActivity : AppCompatActivity() {
         }, 700)
     }
 
+    /** The back camera with the shortest focal length (the ultra-wide), or null when there is only one. */
+    private fun wideSelector(provider: ProcessCameraProvider): CameraSelector? {
+        return try {
+            val back = provider.availableCameraInfos.filter {
+                it.lensFacing == CameraSelector.LENS_FACING_BACK
+            }
+            if (back.size < 2) return null
+            val widest = back.minByOrNull {
+                Camera2CameraInfo.from(it)
+                    .getCameraCharacteristic(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                    ?.minOrNull() ?: Float.MAX_VALUE
+            } ?: return null
+            val id = Camera2CameraInfo.from(widest).cameraId
+            CameraSelector.Builder()
+                .requireLensFacing(CameraSelector.LENS_FACING_BACK)
+                .addCameraFilter { list -> list.filter { Camera2CameraInfo.from(it).cameraId == id } }
+                .build()
+        } catch (e: Exception) {
+            Log.w(TAG, "wide selector failed", e)
+            null
+        }
+    }
+
+    private fun goWide() {
+        val cam = camera ?: return
+        val st = cam.cameraInfo.zoomState.value ?: return
+        if (st.minZoomRatio < 0.95f) {
+            cam.cameraControl.setZoomRatio(st.minZoomRatio)
+        } else {
+            // either the dedicated ultra-wide camera is now bound, or the phone doesn't expose one
+            val f = try {
+                Camera2CameraInfo.from(cam.cameraInfo)
+                    .getCameraCharacteristic(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.minOrNull()
+            } catch (e: Exception) {
+                null
+            }
+            if (f != null && f > 3.0f) toast("No ultra-wide lens available to apps / العدسة الواسعة مش متاحة للتطبيقات")
+        }
+    }
+
+    private fun bokehSupported(): Boolean {
+        return try {
+            val cm = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val facing = if (lensFacing == CameraSelector.LENS_FACING_FRONT)
+                CameraCharacteristics.LENS_FACING_FRONT else CameraCharacteristics.LENS_FACING_BACK
+            cm.cameraIdList.any { id ->
+                val ch = cm.getCameraCharacteristics(id)
+                ch.get(CameraCharacteristics.LENS_FACING) == facing &&
+                    (ch.get(CameraCharacteristics.CONTROL_AVAILABLE_EXTENDED_SCENE_MODE_CAPABILITIES)
+                        ?.any { it.mode == CameraMetadata.CONTROL_EXTENDED_SCENE_MODE_BOKEH_CONTINUOUS } == true)
+            }
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     private fun updateModeUi() {
-        val video = extMode == VIDEO
+        val video = isVid()
         shutter.videoMode = video
         micBtn.visibility = if (video) View.VISIBLE else View.GONE
         if (video) refreshMic()
     }
 
     private fun applyTorch() {
-        camera?.cameraControl?.enableTorch(extMode == VIDEO && flashMode != ImageCapture.FLASH_MODE_OFF)
+        camera?.cameraControl?.enableTorch(isVid() && flashMode != ImageCapture.FLASH_MODE_OFF)
     }
 
     private fun setupZoomPills() {
@@ -894,7 +985,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun onShutter() {
-        if (extMode == VIDEO && recording != null) {
+        if (isVid() && recording != null) {
             stopRecord()
         } else {
             takePhoto()
@@ -1081,16 +1172,27 @@ class MainActivity : AppCompatActivity() {
 
     // ------------------------------------------------------------------ modes, EV, timer
 
+    private fun isVid() = extMode == VIDEO || extMode == PVIDEO
+
     private fun refreshModes() {
         if (!::modeBar.isInitialized) return
         modeBar.removeAllViews()
         val base = CameraSelector.Builder().requireLensFacing(lensFacing).build()
-        val items = mutableListOf(ExtensionMode.NONE to "PHOTO", MP50 to "50MP", VIDEO to "VIDEO", SOFT_HDR to "HDR+")
+        val items = mutableListOf(
+            ExtensionMode.NONE to "PHOTO",
+            WIDE to "WIDE",
+            MP50 to "50MP",
+            NIGHT_SIGHT to "NIGHT SIGHT",
+            SUPER_ZOOM to "SUPER ZOOM",
+            SOFT_HDR to "HDR+",
+            VIDEO to "VIDEO",
+            PVIDEO to "P-VIDEO"
+        )
         val mgr = extMgr
         if (mgr != null) {
             val candidates = listOf(
-                ExtensionMode.HDR to "HDR",
-                ExtensionMode.NIGHT to "NIGHT",
+                ExtensionMode.HDR to "HDR HW",
+                ExtensionMode.NIGHT to "NIGHT HW",
                 ExtensionMode.BOKEH to "PORTRAIT",
                 ExtensionMode.FACE_RETOUCH to "RETOUCH",
                 ExtensionMode.AUTO to "AUTO"
@@ -1117,7 +1219,7 @@ class MainActivity : AppCompatActivity() {
                     if (extMode != m && recording == null && !busy) {
                         tick(it)
                         extMode = m
-                        if (m == VIDEO) ensureMediaPerms()
+                        if (m == VIDEO || m == PVIDEO) ensureMediaPerms()
                         refreshModes()
                         bindCamera()
                     }
@@ -1221,19 +1323,25 @@ class MainActivity : AppCompatActivity() {
         ui.postDelayed({ runCountdown(n - 1) }, 1000)
     }
 
-    /** HDR+: three frames (-2 EV, 0, +2 EV) fused into one photo. */
-    private fun captureHdr() {
+    /** Multi-frame modes: HDR+ (exposure bracket), Night Sight (long-EV burst), Super Res Zoom (aligned burst). */
+    private fun captureBurst(kind: Int) {
         val ic = imageCapture ?: return
         val cam = camera ?: return
         if (busy) return
         val st = cam.cameraInfo.exposureState
         if (!st.isExposureCompensationSupported) {
-            toast("HDR+ not supported on this camera / غير مدعوم")
+            toast("Not supported on this camera / غير مدعوم")
             return
         }
         busy = true
         shutter.busy = true
-        toast("HDR+ — hold steady / ثبّت الهاتف")
+        toast(
+            when (kind) {
+                SOFT_HDR -> "HDR+ \u2014 hold steady / ثبّت الهاتف"
+                NIGHT_SIGHT -> "Night Sight \u2014 hold VERY still, ~6 s / ثبّت الهاتف كويس"
+                else -> "Super Res Zoom \u2014 hold steady / ثبّت الهاتف"
+            }
+        )
         flashFx.animate().cancel()
         flashFx.alpha = 0.5f
         flashFx.animate().alpha(0f).setDuration(220).start()
@@ -1241,15 +1349,26 @@ class MainActivity : AppCompatActivity() {
         val step = st.exposureCompensationStep.toFloat()
         val range = st.exposureCompensationRange
         val base = st.exposureCompensationIndex
-        val shots = listOf(-2f, 0f, 2f).map { (base + (it / step).roundToInt()).coerceIn(range.lower, range.upper) }
+        val shots: List<Int> = when (kind) {
+            SOFT_HDR -> listOf(-2f, 0f, 2f).map { (base + (it / step).roundToInt()).coerceIn(range.lower, range.upper) }
+            NIGHT_SIGHT -> List(6) { range.upper }
+            else -> List(5) { base }
+        }
+        val oldFlash = ic.flashMode
+        ic.flashMode = ImageCapture.FLASH_MODE_OFF
         val files = mutableListOf<File>()
         val filter = currentFilter
         val k = if (filter.isNone) 0f else intensity
         val exec = ContextCompat.getMainExecutor(this)
 
+        fun restore() {
+            cam.cameraControl.setExposureCompensationIndex(base)
+            ic.flashMode = oldFlash
+        }
+
         fun fail() {
             files.forEach { it.delete() }
-            cam.cameraControl.setExposureCompensationIndex(base)
+            restore()
             busy = false
             shutter.busy = false
             toast("Capture failed / فشل التصوير")
@@ -1257,12 +1376,13 @@ class MainActivity : AppCompatActivity() {
 
         fun next(i: Int) {
             if (i >= shots.size) {
-                cam.cameraControl.setExposureCompensationIndex(base)
+                restore()
                 io.execute {
                     val uri = try {
-                        PhotoSaver.saveHdr(applicationContext, files, filter, k)
+                        if (kind == SOFT_HDR) PhotoSaver.saveHdr(applicationContext, files, filter, k)
+                        else PhotoSaver.saveBurst(applicationContext, files, filter, k, kind == NIGHT_SIGHT)
                     } catch (t: Throwable) {
-                        Log.e(TAG, "hdr save failed", t)
+                        Log.e(TAG, "burst save failed", t)
                         null
                     }
                     files.forEach { it.delete() }
@@ -1286,7 +1406,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 return
             }
-            val f = File.createTempFile("hdr_", ".jpg", cacheDir)
+            val f = File.createTempFile("burst_", ".jpg", cacheDir)
             cam.cameraControl.setExposureCompensationIndex(shots[i]).addListener({
                 ic.takePicture(
                     ImageCapture.OutputFileOptions.Builder(f).build(),
@@ -1298,7 +1418,7 @@ class MainActivity : AppCompatActivity() {
                         }
 
                         override fun onError(exception: ImageCaptureException) {
-                            Log.e(TAG, "hdr shot error", exception)
+                            Log.e(TAG, "burst shot error", exception)
                             f.delete()
                             fail()
                         }
@@ -1310,12 +1430,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun captureNow() {
-        if (extMode == VIDEO) {
+        if (isVid()) {
             startRecord()
             return
         }
-        if (extMode == SOFT_HDR) {
-            captureHdr()
+        if (extMode == SOFT_HDR || extMode == NIGHT_SIGHT || extMode == SUPER_ZOOM) {
+            captureBurst(extMode)
             return
         }
         val ic = imageCapture ?: return

@@ -40,7 +40,7 @@ object PhotoSaver {
     /** HDR+: fuses an exposure bracket (dark, normal, bright) and then applies the look. */
     fun saveHdr(ctx: Context, files: List<File>, filter: CamFilter, k: Float): Uri? = store(ctx) { out ->
         val orientation = orientationOf(files[files.size / 2])
-        var maxPx = 8_000_000
+        var maxPx = 13_000_000
         var bmp: Bitmap? = null
         while (bmp == null) {
             try {
@@ -54,6 +54,25 @@ object PhotoSaver {
         bmp.compress(Bitmap.CompressFormat.JPEG, 100, out)
         bmp.recycle()
     }
+
+    /** Night Sight / Super Res Zoom: aligned multi-frame merge, then the look. */
+    fun saveBurst(ctx: Context, files: List<File>, filter: CamFilter, k: Float, night: Boolean): Uri? =
+        store(ctx) { out ->
+            val orientation = orientationOf(files[0])
+            var maxPx = 13_000_000
+            var bmp: Bitmap? = null
+            while (bmp == null) {
+                try {
+                    val fused = BurstFusion.fuse(files, maxPx, night)
+                    bmp = compose(fused, orientation, filter, k, 1f)
+                } catch (e: OutOfMemoryError) {
+                    maxPx /= 2
+                    if (maxPx < 500_000) throw e
+                }
+            }
+            bmp.compress(Bitmap.CompressFormat.JPEG, 100, out)
+            bmp.recycle()
+        }
 
     private fun store(ctx: Context, write: (OutputStream) -> Unit): Uri? {
         val name = "CAMPRO_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date()) + ".jpg"

@@ -8,7 +8,10 @@ enum class Category(val label: String) {
     CINEMA("CINEMATIC"),
     KODAK("KODAK"),
     IPHONE("IPHONE"),
-    FUJI("FUJI")
+    FUJI("FUJI"),
+    NATURAL("NATURAL"),
+    RAW("RAW"),
+    VIBE("VIBE")
 }
 
 /**
@@ -241,6 +244,24 @@ object Looks {
             swatchA = c("#C9C6BE"), swatchB = c("#4B4F55")
         ),
         CamFilter(
+            "Western Dust", Category.CINEMA,
+            tone(sat = 0.85f, contrast = 1.14f, fade = 0.04f, r = 1.12f, g = 1.0f, b = 0.78f),
+            vignette = 0.40f, grain = 0.25f,
+            swatchA = c("#C98B4F"), swatchB = c("#4A2E17")
+        ),
+        CamFilter(
+            "Horror Pale", Category.CINEMA,
+            tone(sat = 0.55f, contrast = 1.25f, r = 0.92f, g = 1.02f, b = 1.0f, bright = -0.04f),
+            vignette = 0.50f, grain = 0.30f,
+            swatchA = c("#9FB0A5"), swatchB = c("#0B0F0D")
+        ),
+        CamFilter(
+            "Romance Glow", Category.CINEMA,
+            tone(sat = 1.05f, contrast = 0.96f, fade = 0.06f, r = 1.08f, g = 0.99f, b = 0.97f, bright = 0.03f),
+            vignette = 0.18f, grain = 0.10f,
+            swatchA = c("#FFC1B6"), swatchB = c("#8E5572")
+        ),
+        CamFilter(
             "Sci-Fi Cyan", Category.CINEMA,
             tone(sat = 0.90f, contrast = 1.20f, r = 0.84f, g = 1.06f, b = 1.14f),
             vignette = 0.36f, grain = 0.10f,
@@ -416,11 +437,88 @@ object Looks {
         )
     )
 
+    /** True-to-life looks: close to what the eye saw, only gently corrected. */
+    val NATURAL: List<CamFilter> = listOf(
+        CamFilter("True Color", Category.NATURAL, tone(sat = 0.98f, contrast = 1.02f),
+            swatchA = c("#7FB069"), swatchB = c("#5C7CFA")),
+        CamFilter("Daylight", Category.NATURAL, tone(sat = 1.04f, contrast = 1.05f, r = 1.01f, b = 0.99f),
+            swatchA = c("#FFE9B0"), swatchB = c("#7BB4E3")),
+        CamFilter("Natural Skin", Category.NATURAL, tone(sat = 0.94f, contrast = 1.03f, r = 1.03f, g = 1.0f, b = 0.98f, bright = 0.01f),
+            swatchA = c("#F2C9A8"), swatchB = c("#C58F6B")),
+        CamFilter("Clear Air", Category.NATURAL, tone(sat = 1.06f, contrast = 1.08f, bright = 0.01f, b = 1.01f),
+            swatchA = c("#BFE3F5"), swatchB = c("#4F8FBF")),
+        CamFilter("Soft Natural", Category.NATURAL, tone(sat = 0.92f, contrast = 0.97f, fade = 0.02f, bright = 0.01f),
+            swatchA = c("#E8DFD2"), swatchB = c("#A7B5A0")),
+        CamFilter("Greens & Earth", Category.NATURAL, tone(sat = 1.05f, contrast = 1.04f, r = 1.0f, g = 1.04f, b = 0.97f),
+            swatchA = c("#6FA862"), swatchB = c("#7A5C3E")),
+        CamFilter("Cool Neutral", Category.NATURAL, tone(sat = 0.98f, contrast = 1.03f, r = 0.98f, b = 1.03f),
+            swatchA = c("#A9C4DE"), swatchB = c("#44566B")),
+        CamFilter("Warm Neutral", Category.NATURAL, tone(sat = 0.98f, contrast = 1.03f, r = 1.03f, b = 0.97f),
+            swatchA = c("#EBC9A0"), swatchB = c("#7C5B3A"))
+    )
+
+    /**
+     * RAW-style profiles: flat, low-contrast, lifted shadows, ready for grading later.
+     * These are looks on the JPEG, not a real DNG/RAW file.
+     */
+    val RAW: List<CamFilter> = listOf(
+        CamFilter("Log Flat", Category.RAW, tone(sat = 0.72f, contrast = 0.74f, fade = 0.08f),
+            swatchA = c("#9C9A93"), swatchB = c("#5C5E63")),
+        CamFilter("Neutral RAW", Category.RAW, tone(sat = 0.90f, contrast = 0.90f, fade = 0.02f),
+            swatchA = c("#B8B5AE"), swatchB = c("#6A6C70")),
+        CamFilter("Soft RAW", Category.RAW, tone(sat = 0.85f, contrast = 0.84f, fade = 0.05f, bright = 0.01f),
+            swatchA = c("#C4BFB5"), swatchB = c("#7A7E82")),
+        CamFilter("Highlight Safe", Category.RAW, tone(sat = 0.92f, contrast = 0.88f, bright = -0.04f, fade = 0.02f),
+            swatchA = c("#A9A6A0"), swatchB = c("#4C4E52")),
+        CamFilter("Shadow Lift", Category.RAW, tone(sat = 0.92f, contrast = 0.88f, bright = 0.03f, fade = 0.07f),
+            swatchA = c("#C9C5BC"), swatchB = c("#8A8C90")),
+        CamFilter("Wide Gamut", Category.RAW, tone(sat = 1.12f, contrast = 0.88f, fade = 0.03f),
+            swatchA = c("#D9825B"), swatchB = c("#4F86B8")),
+        CamFilter("Cine Flat", Category.RAW, tone(sat = 0.78f, contrast = 0.80f, fade = 0.06f, r = 1.01f, b = 1.02f),
+            swatchA = c("#A5A9AC"), swatchB = c("#55606B")),
+        CamFilter("RAW Mono", Category.RAW, tone(sat = 0f, contrast = 0.82f, fade = 0.06f),
+            swatchA = c("#BDBDBD"), swatchB = c("#555555"))
+    )
+
+    val VIBE: List<CamFilter> = listOf(
+        CamFilter("Crisp", Category.VIBE, tone(sat = 1.18f, contrast = 1.16f, bright = 0.01f),
+            swatchA = c("#FF6B6B"), swatchB = c("#4ECDC4")),
+        CamFilter("Sunkissed", Category.VIBE, tone(sat = 1.15f, contrast = 1.04f, r = 1.12f, g = 1.02f, b = 0.86f, bright = 0.02f),
+            vignette = 0.10f, swatchA = c("#FFB347"), swatchB = c("#FF6F61")),
+        CamFilter("Pastel", Category.VIBE, tone(sat = 0.80f, contrast = 0.92f, fade = 0.08f, bright = 0.03f),
+            swatchA = c("#FFD1DC"), swatchB = c("#B5EAD7")),
+        CamFilter("Peach", Category.VIBE, tone(sat = 1.05f, contrast = 0.98f, fade = 0.04f, r = 1.08f, g = 1.0f, b = 0.94f, bright = 0.02f),
+            swatchA = c("#FFCBA4"), swatchB = c("#E78F8E")),
+        CamFilter("Mint Fresh", Category.VIBE, tone(sat = 1.0f, contrast = 1.02f, fade = 0.04f, r = 0.94f, g = 1.06f, b = 1.04f),
+            swatchA = c("#98FF98"), swatchB = c("#2A9D8F")),
+        CamFilter("Rose Gold", Category.VIBE, tone(sat = 0.95f, contrast = 1.04f, fade = 0.03f, r = 1.10f, g = 0.98f, b = 0.98f),
+            swatchA = c("#E8B4A0"), swatchB = c("#B76E79")),
+        CamFilter("Autumn", Category.VIBE, tone(sat = 1.15f, contrast = 1.08f, r = 1.12f, g = 1.0f, b = 0.82f),
+            vignette = 0.15f, swatchA = c("#D2691E"), swatchB = c("#8B2E16")),
+        CamFilter("Winter", Category.VIBE, tone(sat = 0.82f, contrast = 1.08f, r = 0.92f, g = 1.0f, b = 1.12f, bright = 0.01f),
+            swatchA = c("#CFE8FF"), swatchB = c("#4A6FA5")),
+        CamFilter("Vaporwave", Category.VIBE, tone(sat = 1.30f, contrast = 1.10f, fade = 0.05f, r = 1.10f, g = 0.92f, b = 1.16f),
+            swatchA = c("#FF71CE"), swatchB = c("#01CDFE")),
+        CamFilter("Lo-Fi", Category.VIBE, tone(sat = 1.10f, contrast = 1.20f, fade = 0.03f),
+            vignette = 0.30f, grain = 0.15f, swatchA = c("#E4572E"), swatchB = c("#29335C")),
+        CamFilter("Dreamy", Category.VIBE, tone(sat = 0.92f, contrast = 0.90f, fade = 0.09f, bright = 0.04f, r = 1.03f, b = 1.03f),
+            swatchA = c("#F8E1F4"), swatchB = c("#B8C0FF")),
+        CamFilter("Forest Mood", Category.VIBE, tone(sat = 0.85f, contrast = 1.14f, r = 0.92f, g = 1.07f, b = 0.96f, bright = -0.03f),
+            vignette = 0.30f, grain = 0.10f, swatchA = c("#3A7D44"), swatchB = c("#0F1D14")),
+        CamFilter("City Night", Category.VIBE, tone(sat = 1.20f, contrast = 1.22f, r = 0.96f, g = 0.98f, b = 1.14f, bright = -0.02f),
+            vignette = 0.25f, swatchA = c("#FFB400"), swatchB = c("#1B1F3B")),
+        CamFilter("Golden Film", Category.VIBE, tone(sat = 1.10f, contrast = 1.06f, fade = 0.05f, r = 1.10f, g = 1.04f, b = 0.86f),
+            vignette = 0.15f, grain = 0.30f, swatchA = c("#F4D35E"), swatchB = c("#EE964B"))
+    )
+
     fun forCategory(cat: Category): List<CamFilter> = when (cat) {
         Category.CINEMA -> CINEMATIC + CINEMATIC_EXTRA
         Category.KODAK -> KODAK + KODAK_EXTRA
         Category.IPHONE -> IPHONE
         Category.FUJI -> FUJI
+        Category.NATURAL -> NATURAL
+        Category.RAW -> RAW
+        Category.VIBE -> VIBE
         Category.ORIGINAL -> listOf(NONE)
     }
 }
