@@ -57,4 +57,7 @@ dependencies {
     implementation("androidx.media3:media3-common:$media3")
     implementation("androidx.media3:media3-effect:$media3")
     implementation("androidx.media3:media3-transformer:$media3")
+
+    implementation("com.google.mlkit:segmentation-selfie:16.0.0-beta6")
+    implementation("com.google.android.gms:play-services-tasks:18.2.0")
 }

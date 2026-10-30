@@ -56,14 +56,14 @@ object PhotoSaver {
     }
 
     /** Night Sight / Super Res Zoom: aligned multi-frame merge, then the look. */
-    fun saveBurst(ctx: Context, files: List<File>, filter: CamFilter, k: Float, night: Boolean): Uri? =
+    fun saveBurst(ctx: Context, files: List<File>, filter: CamFilter, k: Float, night: Boolean, zoom: Float = 1f): Uri? =
         store(ctx) { out ->
             val orientation = orientationOf(files[0])
             var maxPx = 13_000_000
             var bmp: Bitmap? = null
             while (bmp == null) {
                 try {
-                    val fused = BurstFusion.fuse(files, maxPx, night)
+                    val fused = BurstFusion.fuse(files, maxPx, night, zoom)
                     bmp = compose(fused, orientation, filter, k, 1f)
                 } catch (e: OutOfMemoryError) {
                     maxPx /= 2

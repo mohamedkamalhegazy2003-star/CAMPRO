@@ -20,7 +20,7 @@ object BurstFusion {
 
     private const val DS = 4
 
-    fun fuse(files: List<File>, maxPx: Int, night: Boolean): Bitmap {
+    fun fuse(files: List<File>, maxPx: Int, night: Boolean, zoom: Float = 1f): Bitmap {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(files[0].absolutePath, bounds)
         var sample = 1
@@ -120,7 +120,14 @@ object BurstFusion {
         sumG = CharArray(0)
         sumB = CharArray(0)
 
-        sharpen(out, w, h, if (night) 0.25f else 0.55f)
+        if (night) {
+            sharpen(out, w, h, 0.25f, 1)
+        } else {
+            // the more the shot is zoomed, the more detail/contrast recovery it gets
+            val z = (zoom - 1.5f).coerceIn(0f, 5f)
+            sharpen(out, w, h, 0.60f + 0.10f * z, 1)
+            sharpen(out, w, h, 0.35f + 0.08f * z, 2)
+        }
         return Bitmap.createBitmap(out, w, h, Bitmap.Config.ARGB_8888)
     }
 
@@ -211,17 +218,17 @@ object BurstFusion {
         return bx to by
     }
 
-    private fun sharpen(px: IntArray, w: Int, h: Int, a: Float) {
+    private fun sharpen(px: IntArray, w: Int, h: Int, a: Float, step: Int) {
         val src = px.copyOf()
-        for (y in 1 until h - 1) {
+        for (y in step until h - step) {
             val row = y * w
-            for (x in 1 until w - 1) {
+            for (x in step until w - step) {
                 val i = row + x
                 val c = src[i]
-                val l = src[i - 1]
-                val r = src[i + 1]
-                val u = src[i - w]
-                val d = src[i + w]
+                val l = src[i - step]
+                val r = src[i + step]
+                val u = src[i - step * w]
+                val d = src[i + step * w]
                 var res = 0xFF shl 24
                 var s = 16
                 while (s >= 0) {

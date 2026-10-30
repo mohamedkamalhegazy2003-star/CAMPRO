@@ -14,6 +14,7 @@ import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.media.MediaRecorder
 import android.graphics.Color
+import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
 import android.graphics.Typeface
@@ -53,6 +54,8 @@ import androidx.camera.extensions.ExtensionsManager
 import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.camera2.interop.Camera2Interop
 import androidx.camera.core.Camera
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.SurfaceOrientedMeteringPointFactory
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageCapture
@@ -123,6 +126,9 @@ class MainActivity : AppCompatActivity() {
     private var extMgr: ExtensionsManager? = null
     private var extMode: Int = ExtensionMode.NONE
     private var timerSec = 0
+    private lateinit var pvView: ImageView
+    private val soft = SoftPortrait { bmp -> runOnUiThread { pvView.setImageBitmap(bmp) } }
+    private val analysisExec = Executors.newSingleThreadExecutor()
     private lateinit var zoomBar: LinearLayout
     private lateinit var micBtn: TextView
     private lateinit var recLabel: TextView
@@ -229,6 +235,12 @@ class MainActivity : AppCompatActivity() {
             setBackgroundColor(Color.BLACK)
         }
         pc.addView(previewView, FrameLayout.LayoutParams(MATCH, MATCH))
+        pvView = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setBackgroundColor(Color.BLACK)
+            visibility = View.GONE
+        }
+        pc.addView(pvView, FrameLayout.LayoutParams(MATCH, MATCH))
         previewView.previewStreamState.observe(this) { state ->
             if (state == PreviewView.StreamState.STREAMING) applyPreviewFilter()
         }
@@ -586,7 +598,8 @@ class MainActivity : AppCompatActivity() {
         if (!::effects.isInitialized) return
         val f = currentFilter
         val k = if (f.isNone) 0f else intensity
-        effects.set(f.vignette * k, f.grain * k)
+        if (extMode == PVIDEO) effects.set(0f, 0f) else effects.set(f.vignette * k, f.grain * k)
+        soft.colorFilter = if (f.isNone || k <= 0.01f) null else ColorMatrixColorFilter(Looks.lerp(f.matrix, k))
         applyPreviewFilter()
     }
 
@@ -648,7 +661,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun focusAt(x: Float, y: Float) {
         val cam = camera ?: return
-        val pt = previewView.meteringPointFactory.createPoint(x, y)
+        val pt = if (extMode == PVIDEO)
+            SurfaceOrientedMeteringPointFactory(effects.width.toFloat(), effects.height.toFloat()).createPoint(x, y)
+        else previewView.meteringPointFactory.createPoint(x, y)
         cam.cameraControl.startFocusAndMetering(FocusMeteringAction.Builder(pt).build())
         focusRing.animate().cancel()
         focusRing.x = x - dp(36)
@@ -681,15 +696,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun bindCamera() {
         val provider = cameraProvider ?: return
-        if (extMode == PVIDEO && !bokehSupported()) {
-            toast("Portrait video isn't supported on this phone / بورتريه الفيديو غير مدعوم")
-            extMode = VIDEO
-            refreshModes()
-        }
         var base = CameraSelector.Builder().requireLensFacing(lensFacing).build()
         if (extMode == WIDE) base = wideSelector(provider) ?: base
         val mgr = extMgr
-        val isVideo = isVid()
+        val isVideo = extMode == VIDEO
+        val isPV = extMode == PVIDEO
         val selector = try {
             if (!isVideo && mgr != null && extMode > 0 && mgr.isExtensionAvailable(base, extMode))
                 mgr.getExtensionEnabledCameraSelector(base, extMode)
@@ -697,6 +708,8 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             base
         }
+        previewView.visibility = if (isPV) View.INVISIBLE else View.VISIBLE
+        pvView.visibility = if (isPV) View.VISIBLE else View.GONE
         previewView.scaleType = if (isVideo) PreviewView.ScaleType.FIT_CENTER else PreviewView.ScaleType.FILL_CENTER
         updateModeUi()
 
@@ -710,15 +723,24 @@ class MainActivity : AppCompatActivity() {
                 else AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY
                 val pb = Preview.Builder()
                     .setResolutionSelector(ResolutionSelector.Builder().setAspectRatioStrategy(ratio).build())
-                if (extMode == PVIDEO) {
-                    Camera2Interop.Extender(pb).setCaptureRequestOption(
-                        CaptureRequest.CONTROL_EXTENDED_SCENE_MODE,
-                        CameraMetadata.CONTROL_EXTENDED_SCENE_MODE_BOKEH_CONTINUOUS
-                    )
-                }
                 val preview = pb.build().also { it.surfaceProvider = previewView.surfaceProvider }
 
-                if (isVideo) {
+                if (isPV) {
+                    val analysis = ImageAnalysis.Builder()
+                        .setResolutionSelector(
+                            ResolutionSelector.Builder()
+                                .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
+                                .setResolutionStrategy(
+                                    ResolutionStrategy(Size(1280, 720), ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER)
+                                )
+                                .build()
+                        )
+                        .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                        .build()
+                    analysis.setAnalyzer(analysisExec, soft)
+                    camera = provider.bindToLifecycle(this, selector, analysis)
+                } else if (isVideo) {
                     val recorder = Recorder.Builder()
                         .setQualitySelector(
                             QualitySelector.fromOrderedList(
@@ -727,16 +749,10 @@ class MainActivity : AppCompatActivity() {
                             )
                         )
                         .build()
-                    val vcb = VideoCapture.Builder(recorder)
-                    if (extMode == PVIDEO) {
-                        Camera2Interop.Extender(vcb).setCaptureRequestOption(
-                            CaptureRequest.CONTROL_EXTENDED_SCENE_MODE,
-                            CameraMetadata.CONTROL_EXTENDED_SCENE_MODE_BOKEH_CONTINUOUS
-                        )
-                    }
-                    val vc = vcb.build()
+                    val vc = VideoCapture.withOutput(recorder)
                     camera = provider.bindToLifecycle(this, selector, preview, vc)
                     videoCapture = vc
+                    applyLook()
                 } else {
                     // Standard modes use the sensor's normal (binned, low-noise) JPEG size.
                     // 50MP mode asks CameraX for the highest-resolution size the phone exposes.
@@ -772,7 +788,6 @@ class MainActivity : AppCompatActivity() {
                 setupZoomPills()
                 applyTorch()
                 if (extMode == WIDE) goWide()
-                if (extMode == SUPER_ZOOM) toast("Zoom in (2x or more) then shoot / قرّب الأول وبعدين صوّر")
                 Log.i(TAG, "Bound camera, mode=$extMode, attempt=$attempt")
                 return
             } catch (e: Exception) {
@@ -780,7 +795,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         if (extMode == PVIDEO) {
-            toast("Portrait video failed on this phone / بورتريه الفيديو مش شغال")
+            toast("Portrait video failed / بورتريه الفيديو فشل")
             extMode = VIDEO
             refreshModes()
             bindCamera()
@@ -967,7 +982,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun cycleMic() {
-        if (recording != null) return
+        if (isRecording()) return
         if (micSource == 0) {
             if (!hasPerm(Manifest.permission.BLUETOOTH_CONNECT) || !hasPerm(Manifest.permission.RECORD_AUDIO)) {
                 ensureMediaPerms()
@@ -985,7 +1000,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun onShutter() {
-        if (isVid() && recording != null) {
+        if (isVid() && isRecording()) {
             stopRecord()
         } else {
             takePhoto()
@@ -993,8 +1008,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startRecord() {
-        val vc = videoCapture ?: return
-        if (recording != null || busy) return
+        val vc = videoCapture
+        if (extMode != PVIDEO && vc == null) return
+        if (isRecording() || busy) return
         val audioOk = hasPerm(Manifest.permission.RECORD_AUDIO)
         val useBt = micSource == 1 && audioOk && (btInput() != null || btComm() != null)
         if (micSource == 1 && !useBt) {
@@ -1007,9 +1023,24 @@ class MainActivity : AppCompatActivity() {
         videoFile = out
 
         fun begin() {
-            if (useBt) startBtAudio()
+            if (useBt || (extMode == PVIDEO && audioOk)) startAudioRec(useBt)
+            if (extMode == PVIDEO) {
+                if (soft.startRecording(out)) {
+                    shutter.recording = true
+                    recStartMs = SystemClock.elapsedRealtime()
+                    recLabel.visibility = View.VISIBLE
+                    ui.post(recTick)
+                } else {
+                    stopBtAudio()
+                    audioFile?.delete()
+                    audioFile = null
+                    out.delete()
+                    toast("Camera not ready yet, try again / الكاميرا لسه مجهزتش، جرّب تاني")
+                }
+                return
+            }
             try {
-                var pr = vc.output.prepareRecording(this, FileOutputOptions.Builder(out).build())
+                var pr = vc!!.output.prepareRecording(this, FileOutputOptions.Builder(out).build())
                 if (audioOk && !useBt) pr = pr.withAudioEnabled()
                 recording = pr.start(ContextCompat.getMainExecutor(this)) { onVideoEvent(it) }
                 shutter.recording = true
@@ -1035,20 +1066,40 @@ class MainActivity : AppCompatActivity() {
     private fun stopRecord() {
         shutter.recording = false
         stopBtAudio()
+        if (extMode == PVIDEO && soft.recording) {
+            videoStartNs = soft.firstFrameNs
+            soft.stopRecording { ok ->
+                runOnUiThread {
+                    ui.removeCallbacks(recTick)
+                    recLabel.visibility = View.GONE
+                    val f = videoFile
+                    videoFile = null
+                    if (ok && f != null) {
+                        finishVideo(f, true)
+                    } else {
+                        f?.delete()
+                        audioFile?.delete()
+                        audioFile = null
+                        toast("Recording failed / فشل التسجيل")
+                    }
+                }
+            }
+            return
+        }
         recording?.stop()
     }
 
-    private fun startBtAudio() {
+    private fun startAudioRec(bt: Boolean) {
         try {
             val f = File.createTempFile("aud_", ".m4a", cacheDir)
             val mr = MediaRecorder(this)
-            mr.setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+            mr.setAudioSource(if (bt) MediaRecorder.AudioSource.VOICE_COMMUNICATION else MediaRecorder.AudioSource.CAMCORDER)
             mr.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
             mr.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
             mr.setAudioSamplingRate(44100)
             mr.setAudioEncodingBitRate(96000)
             mr.setAudioChannels(1)
-            btInput()?.let { mr.setPreferredDevice(it) }
+            if (bt) btInput()?.let { mr.setPreferredDevice(it) }
             mr.setOutputFile(f.absolutePath)
             mr.prepare()
             mr.start()
@@ -1102,11 +1153,11 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun finishVideo(raw: File) {
+    private fun finishVideo(raw: File, baked: Boolean = false) {
         busy = true
         shutter.busy = true
         toast("Processing video… / جاري معالجة الفيديو")
-        val filter = currentFilter
+        val filter = if (baked) Looks.NONE else currentFilter
         val k = if (filter.isNone) 0f else intensity
         val aud = audioFile
         audioFile = null
@@ -1174,6 +1225,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun isVid() = extMode == VIDEO || extMode == PVIDEO
 
+    private fun isRecording() = recording != null || soft.recording
+
     private fun refreshModes() {
         if (!::modeBar.isInitialized) return
         modeBar.removeAllViews()
@@ -1216,7 +1269,7 @@ class MainActivity : AppCompatActivity() {
                     setColor(if (sel) ACCENT else Color.argb(110, 0, 0, 0))
                 }
                 setOnClickListener {
-                    if (extMode != m && recording == null && !busy) {
+                    if (extMode != m && !isRecording() && !busy) {
                         tick(it)
                         extMode = m
                         if (m == VIDEO || m == PVIDEO) ensureMediaPerms()
@@ -1273,7 +1326,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun flipCamera() {
-        if (recording != null || busy) return
+        if (isRecording() || busy) return
         lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK)
             CameraSelector.LENS_FACING_FRONT else CameraSelector.LENS_FACING_BACK
         extMode = ExtensionMode.NONE
@@ -1339,7 +1392,7 @@ class MainActivity : AppCompatActivity() {
             when (kind) {
                 SOFT_HDR -> "HDR+ \u2014 hold steady / ثبّت الهاتف"
                 NIGHT_SIGHT -> "Night Sight \u2014 hold VERY still, ~6 s / ثبّت الهاتف كويس"
-                else -> "Super Res Zoom \u2014 hold steady / ثبّت الهاتف"
+                else -> "Zoom detail \u2014 hold steady / ثبّت الهاتف"
             }
         )
         flashFx.animate().cancel()
@@ -1352,8 +1405,9 @@ class MainActivity : AppCompatActivity() {
         val shots: List<Int> = when (kind) {
             SOFT_HDR -> listOf(-2f, 0f, 2f).map { (base + (it / step).roundToInt()).coerceIn(range.lower, range.upper) }
             NIGHT_SIGHT -> List(6) { range.upper }
-            else -> List(5) { base }
+            else -> List(6) { base }
         }
+        val zoomNow = cam.cameraInfo.zoomState.value?.zoomRatio ?: 1f
         val oldFlash = ic.flashMode
         ic.flashMode = ImageCapture.FLASH_MODE_OFF
         val files = mutableListOf<File>()
@@ -1380,7 +1434,7 @@ class MainActivity : AppCompatActivity() {
                 io.execute {
                     val uri = try {
                         if (kind == SOFT_HDR) PhotoSaver.saveHdr(applicationContext, files, filter, k)
-                        else PhotoSaver.saveBurst(applicationContext, files, filter, k, kind == NIGHT_SIGHT)
+                        else PhotoSaver.saveBurst(applicationContext, files, filter, k, kind == NIGHT_SIGHT, zoomNow)
                     } catch (t: Throwable) {
                         Log.e(TAG, "burst save failed", t)
                         null
@@ -1436,6 +1490,12 @@ class MainActivity : AppCompatActivity() {
         }
         if (extMode == SOFT_HDR || extMode == NIGHT_SIGHT || extMode == SUPER_ZOOM) {
             captureBurst(extMode)
+            return
+        }
+        // zoomed photos: merge a burst automatically so the zoomed detail comes out clearer
+        val zr = camera?.cameraInfo?.zoomState?.value?.zoomRatio ?: 1f
+        if (extMode == ExtensionMode.NONE && zr >= 1.6f && imageCapture != null) {
+            captureBurst(SUPER_ZOOM)
             return
         }
         val ic = imageCapture ?: return
@@ -1522,6 +1582,8 @@ class MainActivity : AppCompatActivity() {
         ui.removeCallbacksAndMessages(null)
         try { recording?.stop() } catch (_: Exception) {}
         stopBtAudio()
+        soft.release()
+        analysisExec.shutdown()
         io.shutdown()
         super.onDestroy()
     }
