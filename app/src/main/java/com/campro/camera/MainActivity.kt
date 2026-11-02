@@ -15,6 +15,7 @@ import android.media.AudioManager
 import android.media.MediaRecorder
 import android.graphics.Color
 import android.graphics.ColorMatrix
+import android.graphics.SurfaceTexture
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
 import android.graphics.Typeface
@@ -98,6 +99,7 @@ class MainActivity : AppCompatActivity() {
         private const val NIGHT_SIGHT = -500
         private const val SUPER_ZOOM = -600
         private const val PVIDEO = -700
+        private const val RAW_DNG = -800
         private val ACCENT = Color.parseColor("#FF7A18")
         private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
         private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
@@ -127,6 +129,8 @@ class MainActivity : AppCompatActivity() {
     private var extMode: Int = ExtensionMode.NONE
     private var timerSec = 0
     private lateinit var pvView: ImageView
+    private lateinit var rawView: TextureView
+    private var rawCam: RawCam? = null
     private val soft = SoftPortrait { bmp -> runOnUiThread { pvView.setImageBitmap(bmp) } }
     private val analysisExec = Executors.newSingleThreadExecutor()
     private lateinit var zoomBar: LinearLayout
@@ -241,6 +245,8 @@ class MainActivity : AppCompatActivity() {
             visibility = View.GONE
         }
         pc.addView(pvView, FrameLayout.LayoutParams(MATCH, MATCH))
+        rawView = TextureView(this).apply { visibility = View.GONE }
+        pc.addView(rawView, FrameLayout.LayoutParams(MATCH, MATCH))
         previewView.previewStreamState.observe(this) { state ->
             if (state == PreviewView.StreamState.STREAMING) applyPreviewFilter()
         }
@@ -301,6 +307,7 @@ class MainActivity : AppCompatActivity() {
             typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
             letterSpacing = 0.18f
             gravity = Gravity.CENTER
+            setOnClickListener { showReport() }
         }
         timerBtn = IconView(this, IconView.TIMER).apply { setOnClickListener { cycleTimer() } }
         evBtn = IconView(this, IconView.EV).apply { setOnClickListener { toggleEv() } }
@@ -696,6 +703,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun bindCamera() {
         val provider = cameraProvider ?: return
+        if (extMode == RAW_DNG) {
+            enterRaw(provider)
+            return
+        }
+        leaveRaw()
         var base = CameraSelector.Builder().requireLensFacing(lensFacing).build()
         if (extMode == WIDE) base = wideSelector(provider) ?: base
         val mgr = extMgr
@@ -1225,6 +1237,127 @@ class MainActivity : AppCompatActivity() {
 
     private fun isVid() = extMode == VIDEO || extMode == PVIDEO
 
+    // ------------------------------------------------------------------ RAW (DNG) + capabilities report
+
+    private fun showReport() {
+        val tv = TextView(this).apply {
+            text = CameraInfoReport.build(this@MainActivity)
+            textSize = 11f
+            typeface = Typeface.MONOSPACE
+            setPadding(dp(18), dp(10), dp(18), dp(10))
+            setTextIsSelectable(true)
+        }
+        val sv = android.widget.ScrollView(this).apply { addView(tv) }
+        AlertDialog.Builder(this)
+            .setTitle("Camera capabilities / قدرات الكاميرا")
+            .setView(sv)
+            .setPositiveButton("OK", null)
+            .show()
+    }
+
+    private fun leaveRaw() {
+        if (rawCam == null && rawView.visibility != View.VISIBLE) return
+        rawCam?.close()
+        rawCam = null
+        rawView.visibility = View.GONE
+    }
+
+    private fun backToPhoto(msg: String) {
+        toast(msg)
+        extMode = ExtensionMode.NONE
+        refreshModes()
+        bindCamera()
+    }
+
+    private fun enterRaw(provider: ProcessCameraProvider) {
+        val facing = if (lensFacing == CameraSelector.LENS_FACING_FRONT)
+            CameraCharacteristics.LENS_FACING_FRONT else CameraCharacteristics.LENS_FACING_BACK
+        val found = RawCam.findRawCamera(this, facing)
+        if (found == null) {
+            backToPhoto("RAW is not offered by this phone / الـ RAW مش متاح")
+            return
+        }
+        provider.unbindAll()
+        camera = null
+        imageCapture = null
+        videoCapture = null
+        leaveRaw()
+        updateModeUi()
+        previewView.visibility = View.INVISIBLE
+        pvView.visibility = View.GONE
+        rawView.visibility = View.VISIBLE
+        zoomBar.removeAllViews()
+        zoomPresets.clear()
+        zoomLive?.removeObservers(this)
+        evBtn.visibility = View.GONE
+        effects.set(0f, 0f)
+
+        fun launchRaw(tex: SurfaceTexture) {
+            // give CameraX a moment to release the camera device
+            ui.postDelayed({
+                if (extMode != RAW_DNG) return@postDelayed
+                val rc = RawCam(this)
+                rawCam = rc
+                rc.open(found.first, found.second, tex,
+                    onReady = {
+                        runOnUiThread {
+                            val sz = rc.rawSize
+                            toast("RAW (DNG) \u2713 " + (sz?.let { "${it.width}x${it.height}" } ?: ""))
+                        }
+                    },
+                    onFail = { msg ->
+                        Log.e(TAG, "raw failed: $msg")
+                        runOnUiThread { if (extMode == RAW_DNG) backToPhoto("RAW failed / فشل الـ RAW: $msg") }
+                    })
+            }, 450)
+        }
+
+        val st = rawView.surfaceTexture
+        if (rawView.isAvailable && st != null) {
+            launchRaw(st)
+        } else {
+            rawView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                override fun onSurfaceTextureAvailable(t: SurfaceTexture, w: Int, h: Int) {
+                    rawView.surfaceTextureListener = null
+                    launchRaw(t)
+                }
+                override fun onSurfaceTextureSizeChanged(t: SurfaceTexture, w: Int, h: Int) {}
+                override fun onSurfaceTextureDestroyed(t: SurfaceTexture) = true
+                override fun onSurfaceTextureUpdated(t: SurfaceTexture) {}
+            }
+        }
+    }
+
+    private fun captureRaw() {
+        val rc = rawCam ?: return
+        if (busy) return
+        busy = true
+        shutter.busy = true
+        flashFx.animate().cancel()
+        flashFx.alpha = 0.6f
+        flashFx.animate().alpha(0f).setDuration(220).start()
+        rc.capture { uri ->
+            val thumbBmp: Bitmap? = uri?.let {
+                try {
+                    contentResolver.loadThumbnail(it, Size(320, 320), null)
+                } catch (t: Throwable) {
+                    null
+                }
+            }
+            runOnUiThread {
+                busy = false
+                shutter.busy = false
+                if (uri != null) {
+                    lastUri = uri
+                    thumbBmp?.let { thumb.setImageBitmap(it) }
+                    toast("RAW saved (DNG) / تم حفظ RAW")
+                } else {
+                    toast("RAW capture failed / فشل تصوير RAW")
+                }
+            }
+        }
+    }
+
     private fun isRecording() = recording != null || soft.recording
 
     private fun refreshModes() {
@@ -1241,6 +1374,9 @@ class MainActivity : AppCompatActivity() {
             VIDEO to "VIDEO",
             PVIDEO to "P-VIDEO"
         )
+        if (RawCam.findRawCamera(this, if (lensFacing == CameraSelector.LENS_FACING_FRONT)
+                CameraCharacteristics.LENS_FACING_FRONT else CameraCharacteristics.LENS_FACING_BACK) != null
+        ) items.add(2, RAW_DNG to "RAW")
         val mgr = extMgr
         if (mgr != null) {
             val candidates = listOf(
@@ -1484,6 +1620,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun captureNow() {
+        if (extMode == RAW_DNG) {
+            captureRaw()
+            return
+        }
         if (isVid()) {
             startRecord()
             return
@@ -1583,6 +1723,7 @@ class MainActivity : AppCompatActivity() {
         try { recording?.stop() } catch (_: Exception) {}
         stopBtAudio()
         soft.release()
+        rawCam?.close()
         analysisExec.shutdown()
         io.shutdown()
         super.onDestroy()
